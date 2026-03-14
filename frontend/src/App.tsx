@@ -1,8 +1,18 @@
 import { useMemo, useState } from 'react'
-import { MapContainer, Marker, Popup, TileLayer, useMapEvents } from 'react-leaflet'
+import {
+  CircleMarker,
+  MapContainer,
+  Marker,
+  Polygon,
+  Popup,
+  TileLayer,
+  useMapEvents,
+} from 'react-leaflet'
 import L, { LatLng } from 'leaflet'
 import type { LatLngExpression } from 'leaflet'
 import './App.css'
+
+type LatLngTuple = [number, number]
 
 type Detection = {
   id: number
@@ -20,7 +30,7 @@ const detectionIcon = L.divIcon({
 })
 
 type MapInteractionProps = {
-  onMapClick: (position: LatLngExpression) => void
+  onMapClick: (position: LatLngTuple) => void
   onViewportChange: (center: LatLng, zoom: number) => void
 }
 
@@ -46,6 +56,25 @@ function App() {
   const [detections, setDetections] = useState<Detection[]>([])
   const [center, setCenter] = useState<LatLngExpression>(DEFAULT_CENTER)
   const [, setZoom] = useState<number>(DEFAULT_ZOOM)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [drawPoints, setDrawPoints] = useState<LatLngTuple[]>([])
+
+  const orderedDrawPoints = useMemo(() => {
+    if (drawPoints.length < 3) return drawPoints
+
+    const [sumLat, sumLng] = drawPoints.reduce(
+      (acc, [lat, lng]) => [acc[0] + lat, acc[1] + lng],
+      [0, 0],
+    )
+    const centerLat = sumLat / drawPoints.length
+    const centerLng = sumLng / drawPoints.length
+
+    return [...drawPoints].sort((a, b) => {
+      const angleA = Math.atan2(a[0] - centerLat, a[1] - centerLng)
+      const angleB = Math.atan2(b[0] - centerLat, b[1] - centerLng)
+      return angleA - angleB
+    })
+  }, [drawPoints])
 
   const lastDetection = detections[detections.length - 1]
 
@@ -54,14 +83,10 @@ function App() {
     return `${lat.toFixed(4)}, ${lng.toFixed(4)}`
   }, [center])
 
-  const handleMapClick = (position: LatLngExpression) => {
-    setDetections((prev) => [
-      ...prev,
-      {
-        id: prev.length ? prev[prev.length - 1]!.id + 1 : 1,
-        position,
-      },
-    ])
+  const handleMapClick = (position: LatLngTuple) => {
+    if (isDrawing) {
+      setDrawPoints((prev) => [...prev, position])
+    }
   }
 
   const handleViewportChange = (nextCenter: LatLng, nextZoom: number) => {
@@ -70,6 +95,59 @@ function App() {
   }
 
   const clearDetections = () => setDetections([])
+
+  const startDrawing = () => {
+    setDrawPoints([])
+    setIsDrawing(true)
+  }
+
+  const cancelDrawing = () => {
+    setIsDrawing(false)
+    setDrawPoints([])
+  }
+
+  const finishDrawing = async () => {
+    if (orderedDrawPoints.length < 3) {
+      alert('Define at least three points to create an area.')
+      return
+    }
+
+    setIsDrawing(false)
+
+    const coords = orderedDrawPoints.map(([lat, lng]) => [lng, lat])
+    coords.push(coords[0])
+
+    try {
+      const res = await fetch('http://localhost:8000/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aoi: {
+            type: 'Polygon',
+            coordinates: [coords],
+          },
+        }),
+      })
+
+      if (!res.ok) {
+        // eslint-disable-next-line no-console
+        console.error('Analyze request failed', res.status)
+        return
+      }
+
+      const data = await res.json()
+      const nextDetections: Detection[] = (data.detections ?? []).map(
+        (d: { lat: number; lng: number }, index: number) => ({
+          id: index + 1,
+          position: [d.lat, d.lng],
+        }),
+      )
+      setDetections(nextDetections)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Analyze request error', err)
+    }
+  }
 
   return (
     <div className="tac-root">
@@ -105,6 +183,22 @@ function App() {
               onViewportChange={handleViewportChange}
             />
 
+            {drawPoints.map((p, idx) => (
+              <CircleMarker
+                // eslint-disable-next-line react/no-array-index-key
+                key={idx}
+                center={p}
+                radius={4}
+                pathOptions={{ color: '#00f5ff', fillColor: '#00f5ff', fillOpacity: 0.9 }}
+              />
+            ))}
+
+            {orderedDrawPoints.length > 1 && (
+              <Polygon
+                positions={orderedDrawPoints}
+                pathOptions={{ color: '#00f5ff', weight: 2, fillOpacity: 0.15 }}
+              />
+            )}
             {detections.map((det) => (
               <Marker key={det.id} position={det.position} icon={detectionIcon}>
                 <Popup>
@@ -139,14 +233,24 @@ function App() {
             </dl>
           </div>
 
-          {lastDetection && (
-            <div className="tac-unit-tooltip">
-              <div className="tac-unit-id">UNIT ID: {lastDetection.id.toString().padStart(3, '0')}</div>
-              <div className="tac-unit-meta">
-                HDG: 142° · VEL: 12 KM/H
-              </div>
+          <div className="tac-aoi-card">
+            <h2>Area of Interest</h2>
+            <p>{isDrawing ? 'Click on the map to add vertices. Finish when done.' : 'Define a custom area on the map.'}</p>
+            <div className="tac-aoi-actions">
+              <button type="button" onClick={startDrawing} disabled={isDrawing}>
+                Start Draw
+              </button>
+              <button type="button" onClick={finishDrawing} disabled={!isDrawing || drawPoints.length < 3}>
+                Finish
+              </button>
+              <button type="button" onClick={cancelDrawing} disabled={!isDrawing && drawPoints.length === 0}>
+                Clear
+              </button>
             </div>
-          )}
+            <div className="tac-aoi-meta">
+              <span>Vertices: {drawPoints.length}</span>
+            </div>
+          </div>
 
           <div className="tac-timeline">
             <button
