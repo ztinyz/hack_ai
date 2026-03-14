@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  CircleMarker,
+  Circle,
   MapContainer,
   Marker,
   Polygon,
@@ -16,25 +16,23 @@ type LatLngTuple = [number, number]
 
 type Detection = {
   id: number
-  position: LatLngExpression
-}
-
-type Cluster = {
-  id: number
-  center: LatLngTuple
-  count: number
+  tankId: string
+  sceneId?: string
+  lat: number
+  lng: number
+  confidence?: number
+  className?: string
 }
 
 type HeatCell = {
   id: string
   bounds: LatLngTuple[]
   count: number
+  center: LatLngTuple
 }
 
 const DEFAULT_CENTER: LatLngExpression = [48.3794, 31.1656] // Example theater coordinates
 const DEFAULT_ZOOM = 6
-
-const CELL_SIZE_DEG = 0.08
 
 const detectionIcon = L.divIcon({
   className: 'tac-detection-icon',
@@ -42,14 +40,6 @@ const detectionIcon = L.divIcon({
   iconSize: [20, 20],
   iconAnchor: [10, 10],
 })
-
-const makeGroupIcon = (count: number) =>
-  L.divIcon({
-    className: 'tac-group-icon',
-    html: `<span>${count}</span>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-  })
 
 type MapInteractionProps = {
   onMapClick: (position: LatLngTuple) => void
@@ -77,9 +67,16 @@ function MapInteraction({ onMapClick, onViewportChange }: MapInteractionProps) {
 function App() {
   const [detections, setDetections] = useState<Detection[]>([])
   const [center, setCenter] = useState<LatLngExpression>(DEFAULT_CENTER)
-  const [, setZoom] = useState<number>(DEFAULT_ZOOM)
+  const [zoom, setZoom] = useState<number>(DEFAULT_ZOOM)
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawPoints, setDrawPoints] = useState<LatLngTuple[]>([])
+
+  const cellSizeDeg = useMemo(() => {
+    if (zoom <= 8) return 0.24
+    if (zoom <= 11) return 0.12
+    if (zoom <= 13) return 0.06
+    return 0.03
+  }, [zoom])
 
   const orderedDrawPoints = useMemo(() => {
     if (drawPoints.length < 3) return drawPoints
@@ -105,14 +102,15 @@ function App() {
     const grid = new Map<string, { count: number; minLat: number; minLng: number }>()
 
     detections.forEach((d) => {
-      const [lat, lng] = d.position as LatLngTuple
-      const cellLatIndex = Math.floor(lat / CELL_SIZE_DEG)
-      const cellLngIndex = Math.floor(lng / CELL_SIZE_DEG)
+      const lat = d.lat
+      const lng = d.lng
+      const cellLatIndex = Math.floor(lat / cellSizeDeg)
+      const cellLngIndex = Math.floor(lng / cellSizeDeg)
       const key = `${cellLatIndex}:${cellLngIndex}`
 
       if (!grid.has(key)) {
-        const minLat = cellLatIndex * CELL_SIZE_DEG
-        const minLng = cellLngIndex * CELL_SIZE_DEG
+        const minLat = cellLatIndex * cellSizeDeg
+        const minLng = cellLngIndex * cellSizeDeg
         grid.set(key, { count: 1, minLat, minLng })
       } else {
         const cell = grid.get(key)!
@@ -124,8 +122,8 @@ function App() {
 
     grid.forEach((value, key) => {
       const { count, minLat, minLng } = value
-      const maxLat = minLat + CELL_SIZE_DEG
-      const maxLng = minLng + CELL_SIZE_DEG
+      const maxLat = minLat + cellSizeDeg
+      const maxLng = minLng + cellSizeDeg
 
       const bounds: LatLngTuple[] = [
         [minLat, minLng],
@@ -138,13 +136,30 @@ function App() {
         id: key,
         bounds,
         count,
+        center: [minLat + cellSizeDeg / 2, minLng + cellSizeDeg / 2],
       })
     })
 
     return result
-  }, [detections])
+  }, [detections, cellSizeDeg])
 
-  const lastDetection = detections[detections.length - 1]
+  const maxHeatCount = useMemo(
+    () => heatCells.reduce((max, cell) => Math.max(max, cell.count), 0),
+    [heatCells],
+  )
+
+  const markerLayerOpacity = useMemo(() => {
+    if (zoom <= 11) return 0
+    if (zoom >= 14) return 1
+    return (zoom - 11) / 3
+  }, [zoom])
+
+  // Circle radius in meters derived from the current cell size in degrees.
+  // 1 deg latitude ≈ 111 320 m; divide by 2 for radius (cell center to edge).
+  const cellRadiusMeters = useMemo(
+    () => (cellSizeDeg / 2) * 111_320,
+    [cellSizeDeg],
+  )
 
   const formattedCenter = useMemo(() => {
     const [lat, lng] = center as [number, number]
@@ -206,13 +221,28 @@ function App() {
 
       const data = await res.json()
       const nextDetections: Detection[] = (data.detections ?? []).map(
-        (d: { lat: number; lng: number }, index: number) => ({
+        (
+          d: {
+            tankId?: string
+            sceneId?: string
+            lat: number
+            lng: number
+            confidence?: number
+            className?: string
+          },
+          index: number,
+        ) => ({
           id: index + 1,
-          position: [d.lat, d.lng],
+          tankId: d.tankId ?? `T-${(index + 1).toString().padStart(3, '0')}`,
+          sceneId: d.sceneId,
+          lat: d.lat,
+          lng: d.lng,
+          confidence: d.confidence,
+          className: d.className,
         }),
       )
       setDetections(nextDetections)
-      console.log("Detections:", nextDetections.length)
+      console.log('Detections:', nextDetections.length)
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('Analyze request error', err)
@@ -283,24 +313,61 @@ function App() {
                 pathOptions={{ color: '#ffffff', weight: 2, fillOpacity: 0.1 }}
               />
             )}
+
+            {detections.map((d) => (
+              <Marker
+                key={d.id}
+                position={[d.lat, d.lng]}
+                icon={detectionIcon}
+                opacity={markerLayerOpacity}
+              >
+                <Popup>
+                  <span>
+                    {d.tankId}
+                    <br />
+                    COORDS {d.lat.toFixed(6)}, {d.lng.toFixed(6)}
+                    {d.className ? (
+                      <>
+                        <br />
+                        CLASS {d.className}
+                      </>
+                    ) : null}
+                    {typeof d.confidence === 'number' ? (
+                      <>
+                        <br />
+                        CONF {(d.confidence * 100).toFixed(1)}%
+                      </>
+                    ) : null}
+                  </span>
+                </Popup>
+              </Marker>
+            ))}
+
             {heatCells.map((cell) => {
-              let fillColor = '#00ff00'
-              if (cell.count > 103) {
+              const intensity =
+                maxHeatCount > 0
+                  ? Math.log1p(cell.count) / Math.log1p(maxHeatCount)
+                  : 0
+              const [centerLat, centerLng] = cell.center
+
+              let fillColor = '#00ff88'
+              if (intensity >= 0.75) {
                 fillColor = '#ff0000'
-              } else if (cell.count > 50) {
+              } else if (intensity >= 0.5) {
                 fillColor = '#ff7f00'
-              } else if (cell.count > 10) {
+              } else if (intensity >= 0.25) {
                 fillColor = '#ffff00'
               }
 
-              const fillOpacity = Math.min(0.1 + cell.count / 120, 0.7)
+              const fillOpacity = Math.min(0.2 + intensity * 0.55, 0.75)
 
               return (
-                <Polygon
+                <Circle
                   key={cell.id}
-                  positions={cell.bounds}
+                  center={cell.center}
+                  radius={cellRadiusMeters}
                   pathOptions={{
-                    color: fillColor,
+                    color: 'transparent',
                     fillColor,
                     weight: 0,
                     fillOpacity,
@@ -310,10 +377,12 @@ function App() {
                     <span>
                       {cell.count.toString().padStart(3, '0')} TANKS
                       <br />
-                      GRID AREA ≈ 1 HECTARE
+                      COORDS {centerLat.toFixed(6)}, {centerLng.toFixed(6)}
+                      <br />
+                      INTENSITY {(intensity * 100).toFixed(0)}%
                     </span>
                   </Popup>
-                </Polygon>
+                </Circle>
               )
             })}
           </MapContainer>
@@ -388,7 +457,7 @@ function App() {
           </div>
 
           <div className="tac-scale">
-            <span>5 KM</span>
+            <span>0.3 M/PIX</span>
             <div className="tac-scale-bar" />
           </div>
         </section>

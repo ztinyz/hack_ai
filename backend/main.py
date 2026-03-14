@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
 from pathlib import Path
-import math
 import importlib
+import math
 import os
 from typing import Any, Dict, Optional
 
@@ -49,32 +49,6 @@ def load_manifest() -> Dict:
         return json.load(f)
 
 
-def polygon_centroid(aoi: Polygon) -> tuple[float, float]:
-    # Very simple centroid: average of all vertices (sufficient for this demo).
-    ring = aoi.coordinates[0]
-    sum_lat = 0.0
-    sum_lng = 0.0
-    for lng, lat in ring:
-        sum_lat += lat
-        sum_lng += lng
-    n = len(ring)
-    return sum_lat / n, sum_lng / n
-
-
-def pick_nearest_scene(aoi: Polygon, manifest: Dict) -> str:
-    centroid_lat, centroid_lng = polygon_centroid(aoi)
-    best_id = None
-    best_dist = float("inf")
-    for scene_id, meta in manifest.items():
-        d = math.hypot(meta["centerLat"] - centroid_lat, meta["centerLng"] - centroid_lng)
-        if d < best_dist:
-            best_dist = d
-            best_id = scene_id
-    if best_id is None:
-        raise ValueError("No scenes found in manifest.json")
-    return best_id
-
-
 def _load_model() -> Optional[Any]:
     global _MODEL
     if _MODEL is not None:
@@ -95,8 +69,8 @@ def _load_model() -> Optional[Any]:
 
 def mock_ml_detections(scene_id: str, scene_meta: Dict):
     """
-    Uses YOLO inference if model + scene image are available.
-    Falls back to static detections so frontend integration keeps working.
+    Uses YOLO inference when both the model and the scene image are available.
+    Returns no detections when the scene cannot be analyzed.
     """
     model = _load_model()
     scene_image = SCENES_DIR / scene_meta.get("filename", "")
@@ -107,7 +81,9 @@ def mock_ml_detections(scene_id: str, scene_meta: Dict):
         class_names = _get_model_names(model)
 
         if results:
-            boxes = results[0].boxes
+            result = results[0]
+            boxes = result.boxes
+            orig_h, orig_w = result.orig_shape
             for idx, box in enumerate(boxes):
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 class_id = int(box.cls[0]) if box.cls is not None else -1
@@ -119,23 +95,33 @@ def mock_ml_detections(scene_id: str, scene_meta: Dict):
                         "confidence": float(box.conf[0]),
                         "classId": class_id,
                         "className": class_names.get(class_id, f"class-{class_id}"),
+                        "imgW": float(orig_w),
+                        "imgH": float(orig_h),
                     }
                 )
-
         return detections
 
-    # Fallback mock detections
-    return [
-        {"tankId": "T-001", "x": 100, "y": 120, "confidence": 0.95, "classId": 0, "className": "mock-target"},
-        {"tankId": "T-002", "x": 300, "y": 220, "confidence": 0.90, "classId": 0, "className": "mock-target"},
-    ]
+    return []
 
 
-def pixel_to_latlng(meta: Dict, x: float, y: float, img_w: int = 1024, img_h: int = 1024):
-    # simple fake mapping: +/- 0.01 deg around center
-    dx = (x / img_w - 0.5) * 0.02
-    dy = (y / img_h - 0.5) * 0.02
-    return meta["centerLat"] + dy, meta["centerLng"] + dx
+def pixel_to_latlng(meta: Dict, x: float, y: float, img_w: float = 1024, img_h: float = 1024):
+    center_lat = meta["centerLat"]
+    center_lng = meta["centerLng"]
+    resolution_cm = float(meta.get("resolutionCm", 30))
+    meters_per_pixel = resolution_cm / 100.0
+
+    offset_x_m = (x - img_w / 2.0) * meters_per_pixel
+    offset_y_m = (y - img_h / 2.0) * meters_per_pixel
+
+    meters_per_degree_lat = 111_320.0
+    meters_per_degree_lng = 111_320.0 * math.cos(math.radians(center_lat))
+    if abs(meters_per_degree_lng) < 1e-9:
+        meters_per_degree_lng = 1e-9
+
+    # Image Y grows downward; latitude grows northward.
+    lat = center_lat - offset_y_m / meters_per_degree_lat
+    lng = center_lng + offset_x_m / meters_per_degree_lng
+    return lat, lng
 
 
 def point_in_polygon(lng: float, lat: float, ring: list[tuple[float, float]]) -> bool:
@@ -160,34 +146,67 @@ def point_in_polygon(lng: float, lat: float, ring: list[tuple[float, float]]) ->
     return inside
 
 
+def get_scenes_in_aoi(aoi: Polygon, manifest: Dict[str, Dict[str, Any]]) -> list[tuple[str, Dict[str, Any]]]:
+    ring = aoi.coordinates[0]
+    matching_scenes = []
+
+    for scene_id, meta in manifest.items():
+        center_lat = meta.get("centerLat")
+        center_lng = meta.get("centerLng")
+        if center_lat is None or center_lng is None:
+            continue
+
+        if point_in_polygon(center_lng, center_lat, ring):
+            matching_scenes.append((scene_id, meta))
+
+    return matching_scenes
+
+
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
     manifest = load_manifest()
-    scene_id = pick_nearest_scene(req.aoi, manifest)
-    meta = manifest[scene_id]
-
-    raw_dets = mock_ml_detections(scene_id, meta)
-    dets = []
     ring = req.aoi.coordinates[0]
+    scenes_in_aoi = get_scenes_in_aoi(req.aoi, manifest)
 
-    for d in raw_dets:
-        lat, lng = pixel_to_latlng(meta, d["x"], d["y"])
-        if point_in_polygon(lng, lat, ring):
-            dets.append(
-                {
-                    "tankId": d["tankId"],
-                    "lat": lat,
-                    "lng": lng,
-                    "confidence": d["confidence"],
-                    "classId": d.get("classId"),
-                    "className": d.get("className"),
-                }
-            )
+    if not scenes_in_aoi:
+        return {
+            "sceneId": None,
+            "sceneIds": [],
+            "capturedAt": None,
+            "summary": {"totalTanks": 0, "sceneCount": 0},
+            "detections": [],
+        }
+
+    dets = []
+    scene_ids = []
+    captured_at = []
+
+    for scene_id, meta in scenes_in_aoi:
+        scene_ids.append(scene_id)
+        captured_at.append(meta.get("fakeCapturedAt"))
+
+        raw_dets = mock_ml_detections(scene_id, meta)
+
+        for detection_index, d in enumerate(raw_dets, start=1):
+            lat, lng = pixel_to_latlng(meta, d["x"], d["y"], d.get("imgW", 1024), d.get("imgH", 1024))
+            if point_in_polygon(lng, lat, ring):
+                dets.append(
+                    {
+                        "tankId": d.get("tankId", f"{scene_id}-T-{detection_index:03d}"),
+                        "sceneId": scene_id,
+                        "lat": lat,
+                        "lng": lng,
+                        "confidence": d["confidence"],
+                        "classId": d.get("classId"),
+                        "className": d.get("className"),
+                    }
+                )
 
     return {
-        "sceneId": scene_id,
-        "capturedAt": meta["fakeCapturedAt"],
-        "summary": {"totalTanks": len(dets)},
+        "sceneId": scene_ids[0] if len(scene_ids) == 1 else None,
+        "sceneIds": scene_ids,
+        "capturedAt": captured_at[0] if len(captured_at) == 1 else captured_at,
+        "summary": {"totalTanks": len(dets), "sceneCount": len(scene_ids)},
         "detections": dets,
     }
 

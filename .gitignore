@@ -2,3 +2,4 @@
 runs/
 best.pt
 yolo11m.pt
+backend/__pycache__
