@@ -1,0 +1,16 @@
+{
+    "scene-01": {
+      "filename": "scene-01.png",
+      "fakeCapturedAt": "2026-03-13T10:00:00Z",
+      "centerLat": 48.3794,
+      "centerLng": 31.1656,
+      "resolutionCm": 30
+    },
+    "scene-02": {
+      "filename": "scene-02.png",
+      "fakeCapturedAt": "2026-03-13T22:00:00Z",
+      "centerLat": 48.6,
+      "centerLng": 31.7,
+      "resolutionCm": 30
+    }
+  }
