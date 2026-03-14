@@ -19,6 +19,12 @@ type Detection = {
   position: LatLngExpression
 }
 
+type Cluster = {
+  id: number
+  center: LatLngTuple
+  count: number
+}
+
 const DEFAULT_CENTER: LatLngExpression = [48.3794, 31.1656] // Example theater coordinates
 const DEFAULT_ZOOM = 6
 
@@ -28,6 +34,14 @@ const detectionIcon = L.divIcon({
   iconSize: [20, 20],
   iconAnchor: [10, 10],
 })
+
+const makeGroupIcon = (count: number) =>
+  L.divIcon({
+    className: 'tac-group-icon',
+    html: `<span>${count}</span>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  })
 
 type MapInteractionProps = {
   onMapClick: (position: LatLngTuple) => void
@@ -75,6 +89,37 @@ function App() {
       return angleA - angleB
     })
   }, [drawPoints])
+
+  const clusters = useMemo<Cluster[]>(() => {
+    if (!detections.length) return []
+
+    const THRESHOLD_DEG = 0.03
+    const pts = detections.map((d) => d.position as LatLngTuple)
+    const result: Cluster[] = []
+
+    pts.forEach(([lat, lng]) => {
+      let found: Cluster | undefined
+      for (const c of result) {
+        const [clat, clng] = c.center
+        const dist = Math.hypot(clat - lat, clng - lng)
+        if (dist < THRESHOLD_DEG) {
+          found = c
+          break
+        }
+      }
+
+      if (!found) {
+        result.push({ id: result.length + 1, center: [lat, lng], count: 1 })
+      } else {
+        const [clat, clng] = found.center
+        const newCount = found.count + 1
+        found.center = [(clat * found.count + lat) / newCount, (clng * found.count + lng) / newCount]
+        found.count = newCount
+      }
+    })
+
+    return result
+  }, [detections])
 
   const lastDetection = detections[detections.length - 1]
 
@@ -184,12 +229,26 @@ function App() {
             />
 
             {drawPoints.map((p, idx) => (
-              <CircleMarker
-                // eslint-disable-next-line react/no-array-index-key
+              <Marker
                 key={idx}
-                center={p}
-                radius={4}
-                pathOptions={{ color: '#00f5ff', fillColor: '#00f5ff', fillOpacity: 0.9 }}
+                position={p}
+                draggable
+                icon={L.divIcon({
+                  className: 'tac-aoi-vertex',
+                  html: '<span></span>',
+                  iconSize: [10, 10],
+                  iconAnchor: [5, 5],
+                })}
+                eventHandlers={{
+                  dragend: (e) => {
+                    const { lat, lng } = e.target.getLatLng()
+                    setDrawPoints((prev) => {
+                      const next = [...prev]
+                      next[idx] = [lat, lng]
+                      return next
+                    })
+                  },
+                }}
               />
             ))}
 
@@ -199,16 +258,21 @@ function App() {
                 pathOptions={{ color: '#00f5ff', weight: 2, fillOpacity: 0.15 }}
               />
             )}
-            {detections.map((det) => (
-              <Marker key={det.id} position={det.position} icon={detectionIcon}>
+            {clusters.map((cluster) => (
+              <Marker
+                key={cluster.id}
+                position={cluster.center}
+                icon={cluster.count > 1 ? makeGroupIcon(cluster.count) : detectionIcon}
+              >
                 <Popup>
                   <span>
-                    UNIT #{det.id.toString().padStart(3, '0')}
+                    {cluster.count > 1
+                      ? `${cluster.count.toString().padStart(2, '0')} UNITS`
+                      : '1 UNIT'}
                     <br />
-                    HEAVY ARMOR
+                    HEAVY ARMOR GROUP
                     <br />
-                    {(det.position as [number, number])[0].toFixed(4)},{' '}
-                    {(det.position as [number, number])[1].toFixed(4)}
+                    {cluster.center[0].toFixed(4)}, {cluster.center[1].toFixed(4)}
                   </span>
                 </Popup>
               </Marker>

@@ -125,6 +125,38 @@
     0 0 14px rgba(248, 113, 113, 0.85);
 }
 
+.tac-group-icon span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.9);
+  background:
+    radial-gradient(circle at top, rgba(56, 189, 248, 0.3), transparent 70%),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.98));
+  color: #e0f2fe;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-shadow: 0 0 6px rgba(15, 23, 42, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.95),
+    0 0 18px rgba(59, 130, 246, 0.85);
+}
+
+.tac-aoi-vertex span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.9);
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.95), rgba(8, 47, 73, 0.95));
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.95),
+    0 0 10px rgba(34, 211, 238, 0.9);
+}
+
 .tac-telemetry-card {
   position: absolute;
   top: 72px;
