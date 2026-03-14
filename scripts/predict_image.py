@@ -67,7 +67,7 @@ def main() -> None:
         source=str(image_path),
         conf=args.conf,
         save=args.save,
-        project="runs",
+        project=str(ROOT / "runs"),
         name="predict_image",
         exist_ok=True,
         verbose=False,
