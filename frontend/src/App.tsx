@@ -25,8 +25,16 @@ type Cluster = {
   count: number
 }
 
+type HeatCell = {
+  id: string
+  bounds: LatLngTuple[]
+  count: number
+}
+
 const DEFAULT_CENTER: LatLngExpression = [48.3794, 31.1656] // Example theater coordinates
 const DEFAULT_ZOOM = 6
+
+const CELL_SIZE_DEG = 0.08
 
 const detectionIcon = L.divIcon({
   className: 'tac-detection-icon',
@@ -90,32 +98,47 @@ function App() {
     })
   }, [drawPoints])
 
-  const clusters = useMemo<Cluster[]>(() => {
+  const heatCells = useMemo<HeatCell[]>(() => {
+
     if (!detections.length) return []
 
-    const THRESHOLD_DEG = 0.03
-    const pts = detections.map((d) => d.position as LatLngTuple)
-    const result: Cluster[] = []
+    const grid = new Map<string, { count: number; minLat: number; minLng: number }>()
 
-    pts.forEach(([lat, lng]) => {
-      let found: Cluster | undefined
-      for (const c of result) {
-        const [clat, clng] = c.center
-        const dist = Math.hypot(clat - lat, clng - lng)
-        if (dist < THRESHOLD_DEG) {
-          found = c
-          break
-        }
-      }
+    detections.forEach((d) => {
+      const [lat, lng] = d.position as LatLngTuple
+      const cellLatIndex = Math.floor(lat / CELL_SIZE_DEG)
+      const cellLngIndex = Math.floor(lng / CELL_SIZE_DEG)
+      const key = `${cellLatIndex}:${cellLngIndex}`
 
-      if (!found) {
-        result.push({ id: result.length + 1, center: [lat, lng], count: 1 })
+      if (!grid.has(key)) {
+        const minLat = cellLatIndex * CELL_SIZE_DEG
+        const minLng = cellLngIndex * CELL_SIZE_DEG
+        grid.set(key, { count: 1, minLat, minLng })
       } else {
-        const [clat, clng] = found.center
-        const newCount = found.count + 1
-        found.center = [(clat * found.count + lat) / newCount, (clng * found.count + lng) / newCount]
-        found.count = newCount
+        const cell = grid.get(key)!
+        cell.count += 1
       }
+    })
+
+    const result: HeatCell[] = []
+
+    grid.forEach((value, key) => {
+      const { count, minLat, minLng } = value
+      const maxLat = minLat + CELL_SIZE_DEG
+      const maxLng = minLng + CELL_SIZE_DEG
+
+      const bounds: LatLngTuple[] = [
+        [minLat, minLng],
+        [minLat, maxLng],
+        [maxLat, maxLng],
+        [maxLat, minLng],
+      ]
+
+      result.push({
+        id: key,
+        bounds,
+        count,
+      })
     })
 
     return result
@@ -160,6 +183,7 @@ function App() {
     setIsDrawing(false)
 
     const coords = orderedDrawPoints.map(([lat, lng]) => [lng, lat])
+    //console.log("Polygon points:", orderedDrawPoints)
     coords.push(coords[0])
 
     try {
@@ -188,6 +212,7 @@ function App() {
         }),
       )
       setDetections(nextDetections)
+      console.log("Detections:", nextDetections.length)
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('Analyze request error', err)
@@ -255,28 +280,42 @@ function App() {
             {orderedDrawPoints.length > 1 && (
               <Polygon
                 positions={orderedDrawPoints}
-                pathOptions={{ color: '#00f5ff', weight: 2, fillOpacity: 0.15 }}
+                pathOptions={{ color: '#ffffff', weight: 2, fillOpacity: 0.1 }}
               />
             )}
-            {clusters.map((cluster) => (
-              <Marker
-                key={cluster.id}
-                position={cluster.center}
-                icon={cluster.count > 1 ? makeGroupIcon(cluster.count) : detectionIcon}
-              >
-                <Popup>
-                  <span>
-                    {cluster.count > 1
-                      ? `${cluster.count.toString().padStart(2, '0')} UNITS`
-                      : '1 UNIT'}
-                    <br />
-                    HEAVY ARMOR GROUP
-                    <br />
-                    {cluster.center[0].toFixed(4)}, {cluster.center[1].toFixed(4)}
-                  </span>
-                </Popup>
-              </Marker>
-            ))}
+            {heatCells.map((cell) => {
+              let fillColor = '#00ff00'
+              if (cell.count > 103) {
+                fillColor = '#ff0000'
+              } else if (cell.count > 50) {
+                fillColor = '#ff7f00'
+              } else if (cell.count > 10) {
+                fillColor = '#ffff00'
+              }
+
+              const fillOpacity = Math.min(0.1 + cell.count / 120, 0.7)
+
+              return (
+                <Polygon
+                  key={cell.id}
+                  positions={cell.bounds}
+                  pathOptions={{
+                    color: fillColor,
+                    fillColor,
+                    weight: 0,
+                    fillOpacity,
+                  }}
+                >
+                  <Popup>
+                    <span>
+                      {cell.count.toString().padStart(3, '0')} TANKS
+                      <br />
+                      GRID AREA ≈ 1 HECTARE
+                    </span>
+                  </Popup>
+                </Polygon>
+              )
+            })}
           </MapContainer>
 
           <div className="tac-telemetry-card">
