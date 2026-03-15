@@ -19,5 +19,54 @@
       "centerLat": 45.2542,
       "center Lng": 30.2031,
       "resolutionCm": 30
-    } 
+    }, 
+    "scene-04": {
+      "filename": "scene-04.png",
+      "fakeCapturedAt": "2026-03-11T10:00:00Z",
+      "centerLat": 48.3794,
+      "centerLng": 31.1656,
+      "resolutionCm": 30
+    },
+    "scene-05": {
+      "filename": "scene-05.jpeg",
+      "fakeCapturedAt": "2026-03-11T22:00:00Z",
+      "centerLat": 48.6,
+      "centerLng": 31.7,
+      "resolutionCm": 30
+    },
+    "scene-06": {
+      "filename": "scene-06.jpeg",
+      "fakeCapturedAt": "2026-03-11T10:00:00Z",
+      "centerLat": 49.3794,
+      "centerLng": 31.1656,
+      "resolutionCm": 30
+    },
+    "scene-07": {
+      "filename": "scene-07.jpeg",
+      "fakeCapturedAt": "2026-03-13T22:00:00Z",
+      "centerLat": 48.6,
+      "centerLng": 32.7,
+      "resolutionCm": 30
+    },
+    "scene-08": {
+      "filename": "scene-08.jpeg",
+      "fakeCapturedAt": "2026-03-12T22:00:00Z",
+      "centerLat": 49.6,
+      "centerLng": 31.7,
+      "resolutionCm": 30
+    },
+    "scene-09": {
+      "filename": "scene-09.jpeg",
+      "fakeCapturedAt": "2026-03-12T10:00:00Z",
+      "centerLat": 48.3794,
+      "centerLng": 32.1656,
+      "resolutionCm": 30
+    },
+    "scene-10": {
+      "filename": "scene-10.jpeg",
+      "fakeCapturedAt": "2026-03-12T10:00:00Z",
+      "centerLat": 46.6,
+      "centerLng": 31.7,
+      "resolutionCm": 30
+    }
   }

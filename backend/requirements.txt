@@ -1,0 +1,5 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+ultralytics>=8.3.0
+cloudinary>=1.41.0
+google-cloud-storage>=2.18.0

@@ -15,6 +15,44 @@ Original 5 classes simplified to 2:
 
 ## Quick Start
 
+### 0. Backend database + cloud image storage
+
+The backend now supports:
+- SQLite metadata DB (`backend/scenes.db`)
+- Cloud image storage (Cloudinary)
+- DB stores only image URLs (`photo_url`)
+
+Setup:
+
+```bash
+cd backend
+python -m pip install -r requirements.txt
+cp .env.example .env
+# then fill CLOUDINARY_* values
+```
+
+Sync local images from `data/scenes` into cloud + DB:
+
+```bash
+curl -X POST http://localhost:8000/scenes/sync-manifest \
+	-H "Content-Type: application/json" \
+	-d '{"forceUpload": false}'
+```
+
+List scenes stored in DB:
+
+```bash
+curl http://localhost:8000/scenes
+```
+
+If images are already uploaded manually to your bucket/CDN, import URLs without uploading from backend:
+
+```bash
+curl -X POST http://localhost:8000/scenes/import-manifest-urls \
+	-H "Content-Type: application/json" \
+	-d '{"baseUrl":"https://your-bucket.example.com","pathPrefix":"scenes","overwriteExisting":true}'
+```
+
 ### 1. Prepare Data (local)
 
 ```bash

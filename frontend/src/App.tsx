@@ -224,12 +224,6 @@ function App() {
     setZoom(nextZoom)
   }
 
-  const clearDetections = () => {
-    setDetections([])
-    setPlaybackFrames(null)
-    setPlaybackIndex(0)
-  }
-
   const mapFrameDetections = (raw: PlaybackFrame['detections']): Detection[] =>
     raw.map((d, index) => ({
       id: index + 1,
@@ -291,9 +285,14 @@ function App() {
         return
       }
       setPlaybackFrames(frames)
-      const lastIndex = frames.length - 1
-      setPlaybackIndex(lastIndex)
-      setDetections(mapFrameDetections(frames[lastIndex].detections))
+      const latestWithDetections = [...frames]
+        .map((frame, index) => ({ frame, index }))
+        .reverse()
+        .find(({ frame }) => (frame.detections?.length ?? 0) > 0)
+
+      const selectedIndex = latestWithDetections ? latestWithDetections.index : frames.length - 1
+      setPlaybackIndex(selectedIndex)
+      setDetections(mapFrameDetections(frames[selectedIndex].detections))
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('Playback request error', err)
