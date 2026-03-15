@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useEffect } from 'react'
 import {
-  Circle,
   MapContainer,
   Marker,
   Polygon,
@@ -25,13 +24,6 @@ type Detection = {
   className?: string
 }
 
-type HeatCell = {
-  id: string
-  bounds: LatLngTuple[]
-  count: number
-  center: LatLngTuple
-}
-
 type PlaybackFrame = {
   capturedAt: string
   label: string
@@ -44,6 +36,9 @@ type PlaybackFrame = {
     className?: string
   }>
 }
+
+const isMilitaryContact = (className?: string) =>
+  typeof className === 'string' && /military|tank|armor|armoured|armored/i.test(className)
 
 const DEFAULT_CENTER: LatLngExpression = [48.3794, 31.1656] // Example theater coordinates
 const DEFAULT_ZOOM = 6
@@ -118,13 +113,6 @@ function App() {
     return () => clearInterval(interval)
   }, [isPlaying, playbackFrames])
 
-  const cellSizeDeg = useMemo(() => {
-    if (zoom <= 8) return 0.24
-    if (zoom <= 11) return 0.12
-    if (zoom <= 13) return 0.06
-    return 0.03
-  }, [zoom])
-
   const orderedDrawPoints = useMemo(() => {
     if (drawPoints.length < 3) return drawPoints
 
@@ -142,71 +130,12 @@ function App() {
     })
   }, [drawPoints])
 
-  const heatCells = useMemo<HeatCell[]>(() => {
-
-    if (!detections.length) return []
-
-    const grid = new Map<string, { count: number; minLat: number; minLng: number }>()
-
-    detections.forEach((d) => {
-      const lat = d.lat
-      const lng = d.lng
-      const cellLatIndex = Math.floor(lat / cellSizeDeg)
-      const cellLngIndex = Math.floor(lng / cellSizeDeg)
-      const key = `${cellLatIndex}:${cellLngIndex}`
-
-      if (!grid.has(key)) {
-        const minLat = cellLatIndex * cellSizeDeg
-        const minLng = cellLngIndex * cellSizeDeg
-        grid.set(key, { count: 1, minLat, minLng })
-      } else {
-        const cell = grid.get(key)!
-        cell.count += 1
-      }
-    })
-
-    const result: HeatCell[] = []
-
-    grid.forEach((value, key) => {
-      const { count, minLat, minLng } = value
-      const maxLat = minLat + cellSizeDeg
-      const maxLng = minLng + cellSizeDeg
-
-      const bounds: LatLngTuple[] = [
-        [minLat, minLng],
-        [minLat, maxLng],
-        [maxLat, maxLng],
-        [maxLat, minLng],
-      ]
-
-      result.push({
-        id: key,
-        bounds,
-        count,
-        center: [minLat + cellSizeDeg / 2, minLng + cellSizeDeg / 2],
-      })
-    })
-
-    return result
-  }, [detections, cellSizeDeg])
-
-  const maxHeatCount = useMemo(
-    () => heatCells.reduce((max, cell) => Math.max(max, cell.count), 0),
-    [heatCells],
-  )
-
   const markerLayerOpacity = useMemo(() => {
-    if (zoom <= 11) return 0
+    if (zoom <= 8) return 0.55
+    if (zoom <= 11) return 0.72
     if (zoom >= 14) return 1
-    return (zoom - 11) / 3
+    return 0.72 + ((zoom - 11) / 3) * 0.28
   }, [zoom])
-
-  // Circle radius in meters derived from the current cell size in degrees.
-  // 1 deg latitude ≈ 111 320 m; divide by 2 for radius (cell center to edge).
-  const cellRadiusMeters = useMemo(
-    () => (cellSizeDeg / 2) * 111_320,
-    [cellSizeDeg],
-  )
 
   const formattedCenter = useMemo(() => {
     const [lat, lng] = center as [number, number]
@@ -225,15 +154,17 @@ function App() {
   }
 
   const mapFrameDetections = (raw: PlaybackFrame['detections']): Detection[] =>
-    raw.map((d, index) => ({
-      id: index + 1,
-      tankId: d.tankId ?? `T-${(index + 1).toString().padStart(3, '0')}`,
-      sceneId: d.sceneId,
-      lat: d.lat,
-      lng: d.lng,
-      confidence: d.confidence,
-      className: d.className,
-    }))
+    raw
+      .filter((d) => isMilitaryContact(d.className))
+      .map((d, index) => ({
+        id: index + 1,
+        tankId: d.tankId ?? `T-${(index + 1).toString().padStart(3, '0')}`,
+        sceneId: d.sceneId,
+        lat: d.lat,
+        lng: d.lng,
+        confidence: d.confidence,
+        className: d.className,
+      }))
 
   const startDrawing = () => {
     setDrawPoints([])
@@ -399,49 +330,6 @@ function App() {
                 </Popup>
               </Marker>
             ))}
-
-            {heatCells.map((cell) => {
-              const intensity =
-                maxHeatCount > 0
-                  ? Math.log1p(cell.count) / Math.log1p(maxHeatCount)
-                  : 0
-              const [centerLat, centerLng] = cell.center
-
-              let fillColor = '#00ff88'
-              if (intensity >= 0.75) {
-                fillColor = '#ff0000'
-              } else if (intensity >= 0.5) {
-                fillColor = '#ff7f00'
-              } else if (intensity >= 0.25) {
-                fillColor = '#ffff00'
-              }
-
-              const fillOpacity = Math.min(0.2 + intensity * 0.55, 0.3)
-
-              return (
-                <Circle
-                  key={cell.id}
-                  center={cell.center}
-                  radius={cellRadiusMeters}
-                  pathOptions={{
-                    color: 'transparent',
-                    fillColor,
-                    weight: 0,
-                    fillOpacity,
-                  }}
-                >
-                  <Popup>
-                    <span>
-                      {cell.count.toString().padStart(3, '0')} TANKS
-                      <br />
-                      COORDS {centerLat.toFixed(6)}, {centerLng.toFixed(6)}
-                      <br />
-                      INTENSITY {(intensity * 100).toFixed(0)}%
-                    </span>
-                  </Popup>
-                </Circle>
-              )
-            })}
           </MapContainer>
 
           <div className="tac-telemetry-card">
