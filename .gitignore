@@ -1,6 +1,5 @@
 .venv/
 runs/
-best.pt
 yolo11m.pt
 backend/__pycache__
 data/
