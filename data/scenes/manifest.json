@@ -13,15 +13,8 @@
       "centerLng": 31.7,
       "resolutionCm": 30
     },
-    "scene-03": {
-      "filename": "scene-03.png",
-      "fakeCapturedAt": "2026-03-13T22:00:00Z",
-      "centerLat": 45.2542,
-      "center Lng": 30.2031,
-      "resolutionCm": 30
-    }, 
     "scene-04": {
-      "filename": "scene-04.png",
+      "filename": "scene-04.png",   
       "fakeCapturedAt": "2026-03-11T10:00:00Z",
       "centerLat": 48.3794,
       "centerLng": 31.1656,

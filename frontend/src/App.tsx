@@ -24,6 +24,15 @@ type Detection = {
   className?: string
 }
 
+type DetectionGroup = {
+  id: string
+  lat: number
+  lng: number
+  count: number
+  sceneIds: string[]
+  detections: Detection[]
+}
+
 type PlaybackFrame = {
   capturedAt: string
   label: string
@@ -49,6 +58,14 @@ const detectionIcon = L.divIcon({
   iconSize: [20, 20],
   iconAnchor: [10, 10],
 })
+
+const createGroupIcon = (count: number) =>
+  L.divIcon({
+    className: 'tac-group-icon',
+    html: `<span>${count}</span>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  })
 
 type MapInteractionProps = {
   onMapClick: (position: LatLngTuple) => void
@@ -137,6 +154,48 @@ function App() {
     return 0.72 + ((zoom - 11) / 3) * 0.28
   }, [zoom])
 
+  const groupCellSizeDeg = useMemo(() => {
+    if (zoom <= 6) return 0.42
+    if (zoom <= 8) return 0.24
+    if (zoom <= 10) return 0.12
+    return 0.06
+  }, [zoom])
+
+  const showGroupedMarkers = zoom <= 10
+
+  const groupedDetections = useMemo<DetectionGroup[]>(() => {
+    if (!showGroupedMarkers || detections.length === 0) return []
+
+    const groups = new Map<string, Detection[]>()
+
+    detections.forEach((detection) => {
+      const latKey = Math.floor(detection.lat / groupCellSizeDeg)
+      const lngKey = Math.floor(detection.lng / groupCellSizeDeg)
+      const key = `${latKey}:${lngKey}`
+      const existing = groups.get(key)
+      if (existing) {
+        existing.push(detection)
+        return
+      }
+      groups.set(key, [detection])
+    })
+
+    return Array.from(groups.entries()).map(([key, items]) => {
+      const avgLat = items.reduce((sum, item) => sum + item.lat, 0) / items.length
+      const avgLng = items.reduce((sum, item) => sum + item.lng, 0) / items.length
+      const sceneIds = [...new Set(items.map((item) => item.sceneId).filter(Boolean) as string[])]
+
+      return {
+        id: key,
+        lat: avgLat,
+        lng: avgLng,
+        count: items.length,
+        sceneIds,
+        detections: items,
+      }
+    })
+  }, [detections, groupCellSizeDeg, showGroupedMarkers])
+
   const formattedCenter = useMemo(() => {
     const [lat, lng] = center as [number, number]
     return `${lat.toFixed(4)}, ${lng.toFixed(4)}`
@@ -172,6 +231,10 @@ function App() {
   }
 
   const cancelDrawing = () => {
+    setDetections([])
+    setPlaybackFrames(null)
+    setPlaybackIndex(0)
+    setIsPlaying(false)
     setIsDrawing(false)
     setDrawPoints([])
   }
@@ -302,7 +365,26 @@ function App() {
               />
             )}
 
-            {detections.map((d) => (
+            {showGroupedMarkers
+              ? groupedDetections.map((group) => (
+                  <Marker
+                    key={group.id}
+                    position={[group.lat, group.lng]}
+                    icon={createGroupIcon(group.count)}
+                    opacity={0.95}
+                  >
+                    <Popup>
+                      <span>
+                        {group.count} military vehicles
+                        <br />
+                        CENTER {group.lat.toFixed(6)}, {group.lng.toFixed(6)}
+                        <br />
+                        SCENES {group.sceneIds.length > 0 ? group.sceneIds.join(', ') : '—'}
+                      </span>
+                    </Popup>
+                  </Marker>
+                ))
+              : detections.map((d) => (
               <Marker
                 key={d.id}
                 position={[d.lat, d.lng]}
@@ -329,7 +411,7 @@ function App() {
                   </span>
                 </Popup>
               </Marker>
-            ))}
+                ))}
           </MapContainer>
 
           <div className="tac-telemetry-card">

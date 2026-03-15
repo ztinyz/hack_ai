@@ -5,8 +5,10 @@ Usage:
   python scripts/predict_image.py \
     --model best.pt \
     --image data/scenes/scene-01.png \
-    --conf 0.25 \
-    --save
+        --conf 0.25
+
+Disable saving annotated output:
+    python scripts/predict_image.py --image data/scenes/ex1.jpeg --no-save
 """
 
 from __future__ import annotations
@@ -41,7 +43,18 @@ def main() -> None:
     parser.add_argument("--model", default="best.pt", help="Path to YOLO .pt model")
     parser.add_argument("--image", required=True, help="Path to image file")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
-    parser.add_argument("--save", action="store_true", help="Save annotated image to runs/predict_image")
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        default=True,
+        help="Save annotated image to runs/predict_image (default: on)",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_false",
+        dest="save",
+        help="Disable saving annotated image",
+    )
     args = parser.parse_args()
 
     model_path = resolve_input_path(args.model)
@@ -66,7 +79,7 @@ def main() -> None:
     results = model.predict(
         source=str(image_path),
         conf=args.conf,
-        save=args.save,
+        save=bool(args.save),
         project=str(ROOT / "runs"),
         name="predict_image",
         exist_ok=True,
