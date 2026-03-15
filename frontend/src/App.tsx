@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import {
   Circle,
   MapContainer,
@@ -31,6 +32,19 @@ type HeatCell = {
   center: LatLngTuple
 }
 
+type PlaybackFrame = {
+  capturedAt: string
+  label: string
+  detections: Array<{
+    tankId?: string
+    sceneId?: string
+    lat: number
+    lng: number
+    confidence?: number
+    className?: string
+  }>
+}
+
 const DEFAULT_CENTER: LatLngExpression = [48.3794, 31.1656] // Example theater coordinates
 const DEFAULT_ZOOM = 6
 
@@ -44,12 +58,19 @@ const detectionIcon = L.divIcon({
 type MapInteractionProps = {
   onMapClick: (position: LatLngTuple) => void
   onViewportChange: (center: LatLng, zoom: number) => void
+  onCursorMove: (position: LatLngTuple | null) => void
 }
 
-function MapInteraction({ onMapClick, onViewportChange }: MapInteractionProps) {
+function MapInteraction({ onMapClick, onViewportChange, onCursorMove }: MapInteractionProps) {
   useMapEvents({
     click(e) {
       onMapClick([e.latlng.lat, e.latlng.lng])
+    },
+    mousemove(e) {
+      onCursorMove([e.latlng.lat, e.latlng.lng])
+    },
+    mouseout() {
+      onCursorMove(null)
     },
     moveend(e) {
       const map = e.target
@@ -64,12 +85,38 @@ function MapInteraction({ onMapClick, onViewportChange }: MapInteractionProps) {
   return null
 }
 
+
 function App() {
   const [detections, setDetections] = useState<Detection[]>([])
+  const [playbackFrames, setPlaybackFrames] = useState<PlaybackFrame[] | null>(null)
+  const [playbackIndex, setPlaybackIndex] = useState<number>(0)
   const [center, setCenter] = useState<LatLngExpression>(DEFAULT_CENTER)
   const [zoom, setZoom] = useState<number>(DEFAULT_ZOOM)
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawPoints, setDrawPoints] = useState<LatLngTuple[]>([])
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [cursorLatLng, setCursorLatLng] = useState<LatLngTuple | null>(null)
+
+
+  useEffect(() => {
+    if (!isPlaying || !playbackFrames) return
+  
+    const interval = setInterval(() => {
+      setPlaybackIndex((prev) => {
+        const next = prev + 1
+  
+        if (next >= playbackFrames.length) {
+          setIsPlaying(false)
+          return prev
+        }
+  
+        setDetections(mapFrameDetections(playbackFrames[next].detections))
+        return next
+      })
+    }, 800) // speed of animation
+  
+    return () => clearInterval(interval)
+  }, [isPlaying, playbackFrames])
 
   const cellSizeDeg = useMemo(() => {
     if (zoom <= 8) return 0.24
@@ -177,7 +224,22 @@ function App() {
     setZoom(nextZoom)
   }
 
-  const clearDetections = () => setDetections([])
+  const clearDetections = () => {
+    setDetections([])
+    setPlaybackFrames(null)
+    setPlaybackIndex(0)
+  }
+
+  const mapFrameDetections = (raw: PlaybackFrame['detections']): Detection[] =>
+    raw.map((d, index) => ({
+      id: index + 1,
+      tankId: d.tankId ?? `T-${(index + 1).toString().padStart(3, '0')}`,
+      sceneId: d.sceneId,
+      lat: d.lat,
+      lng: d.lng,
+      confidence: d.confidence,
+      className: d.className,
+    }))
 
   const startDrawing = () => {
     setDrawPoints([])
@@ -202,7 +264,7 @@ function App() {
     coords.push(coords[0])
 
     try {
-      const res = await fetch('http://localhost:8000/analyze', {
+      const res = await fetch('http://localhost:8000/playback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -215,38 +277,33 @@ function App() {
 
       if (!res.ok) {
         // eslint-disable-next-line no-console
-        console.error('Analyze request failed', res.status)
+        console.error('Playback request failed', res.status)
         return
       }
 
       const data = await res.json()
-      const nextDetections: Detection[] = (data.detections ?? []).map(
-        (
-          d: {
-            tankId?: string
-            sceneId?: string
-            lat: number
-            lng: number
-            confidence?: number
-            className?: string
-          },
-          index: number,
-        ) => ({
-          id: index + 1,
-          tankId: d.tankId ?? `T-${(index + 1).toString().padStart(3, '0')}`,
-          sceneId: d.sceneId,
-          lat: d.lat,
-          lng: d.lng,
-          confidence: d.confidence,
-          className: d.className,
-        }),
-      )
-      setDetections(nextDetections)
-      console.log('Detections:', nextDetections.length)
+      const frames: PlaybackFrame[] = data.frames ?? []
+      if (frames.length === 0) {
+        setDetections([])
+        setPlaybackFrames(null)
+        setPlaybackIndex(0)
+        setDetections([])
+        return
+      }
+      setPlaybackFrames(frames)
+      const lastIndex = frames.length - 1
+      setPlaybackIndex(lastIndex)
+      setDetections(mapFrameDetections(frames[lastIndex].detections))
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error('Analyze request error', err)
+      console.error('Playback request error', err)
     }
+  }
+
+  const handlePlaybackSliderChange = (index: number) => {
+    if (!playbackFrames || index < 0 || index >= playbackFrames.length) return
+    setPlaybackIndex(index)
+    setDetections(mapFrameDetections(playbackFrames[index].detections))
   }
 
   return (
@@ -281,6 +338,7 @@ function App() {
             <MapInteraction
               onMapClick={handleMapClick}
               onViewportChange={handleViewportChange}
+              onCursorMove={setCursorLatLng}
             />
 
             {drawPoints.map((p, idx) => (
@@ -359,7 +417,7 @@ function App() {
                 fillColor = '#ffff00'
               }
 
-              const fillOpacity = Math.min(0.2 + intensity * 0.55, 0.75)
+              const fillOpacity = Math.min(0.2 + intensity * 0.55, 0.3)
 
               return (
                 <Circle
@@ -391,11 +449,19 @@ function App() {
             <h2>Theater Telemetry</h2>
             <dl>
               <div className="tac-telemetry-row">
-                <dt>Latitude</dt>
+                <dt>Cursor Lat</dt>
+                <dd>{cursorLatLng ? cursorLatLng[0].toFixed(6) : '—'}</dd>
+              </div>
+              <div className="tac-telemetry-row">
+                <dt>Cursor Lng</dt>
+                <dd>{cursorLatLng ? cursorLatLng[1].toFixed(6) : '—'}</dd>
+              </div>
+              <div className="tac-telemetry-row">
+                <dt>View Center Lat</dt>
                 <dd>{formattedCenter.split(',')[0]}°N</dd>
               </div>
               <div className="tac-telemetry-row">
-                <dt>Longitude</dt>
+                <dt>View Center Lng</dt>
                 <dd>{formattedCenter.split(',')[1]}°E</dd>
               </div>
               <div className="tac-telemetry-row tac-telemetry-row-strong">
@@ -428,26 +494,40 @@ function App() {
             <button
               type="button"
               className="tac-play-button"
-              onClick={clearDetections}
-              disabled={detections.length === 0}
+              onClick={() => setIsPlaying((p) => !p)}
+              disabled={!playbackFrames}
+              title="Clear playback"
             >
-              ▶
+              {isPlaying ? '⏸' : '▶'}
             </button>
 
             <div className="tac-timeline-content">
-              <div className="tac-timeline-label">Playback History (T-hours)</div>
-              <div className="tac-timeline-title">Enemy Displacement Timeline</div>
+              <div className="tac-timeline-label">Playback History</div>
+              <div className="tac-timeline-title">7 days, 2 timestamps/day</div>
               <div className="tac-timeline-slider-row">
-                <span>-24h</span>
-                <input type="range" min={0} max={24} defaultValue={24} />
+                <span>7d ago</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={playbackFrames ? playbackFrames.length - 1 : 0}
+                  value={playbackIndex}
+                  onChange={(e) => handlePlaybackSliderChange(Number(e.target.value))}
+                  disabled={!playbackFrames || playbackFrames.length === 0}
+                />
                 <span>Now</span>
               </div>
             </div>
 
             <div className="tac-timeline-meta">
               <div className="tac-timeline-meta-label">Timeframe</div>
-              <div className="tac-timeline-meta-value">Last 24 Hours</div>
-              <div className="tac-timeline-meta-current">Current View: Now</div>
+              <div className="tac-timeline-meta-value">
+                {playbackFrames ? 'Last 7 days' : 'Draw AOI & Finish to load'}
+              </div>
+              <div className="tac-timeline-meta-current">
+                {playbackFrames && playbackFrames[playbackIndex]
+                  ? `Current: ${playbackFrames[playbackIndex].label}`
+                  : 'Current: —'}
+              </div>
             </div>
           </div>
 

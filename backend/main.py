@@ -1,12 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import hashlib
 import json
-from pathlib import Path
-import importlib
 import math
 import os
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import importlib
 
 MANIFEST_PATH = Path(__file__).parents[1] / "data" / "scenes" / "manifest.json"
 SCENES_DIR = Path(__file__).parents[1] / "data" / "scenes"
@@ -208,6 +211,129 @@ def analyze(req: AnalyzeRequest):
         "capturedAt": captured_at[0] if len(captured_at) == 1 else captured_at,
         "summary": {"totalTanks": len(dets), "sceneCount": len(scene_ids)},
         "detections": dets,
+    }
+
+def _playback_timestamps(days: int = 7) -> List[datetime]:
+    """
+    Generate timestamps for the last `days` days at 08:00 and 18:00 UTC.
+    The last timestamp is 'now'.
+    """
+    now = datetime.now(timezone.utc)
+
+    start_day = (now - timedelta(days=days)).date()
+
+    stamps: List[datetime] = []
+
+    for d in range(days):
+        day = start_day + timedelta(days=d)
+
+        morning = datetime(day.year, day.month, day.day, 8, 0, 0, tzinfo=timezone.utc)
+        evening = datetime(day.year, day.month, day.day, 18, 0, 0, tzinfo=timezone.utc)
+
+        stamps.append(morning)
+        stamps.append(evening)
+
+    stamps.append(now)  # final frame = current moment
+    return stamps
+
+
+def _parse_captured_at(meta: Dict) -> Optional[datetime]:
+    raw = meta.get("fakeCapturedAt")
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw.replace("Z", "+00:00")
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+# Only show detections for a frame if we have a scene captured within this window of the frame time.
+MAX_SCENE_TIME_DIFF_SECONDS = 12 * 3600  # 12 hours
+
+
+def _pick_scene_for_timestamp(manifest: Dict, ts: datetime) -> Optional[tuple[str, Dict]]:
+    """Return (scene_id, meta) whose fakeCapturedAt is nearest to ts, or None if none within window."""
+    best = None
+    best_diff = None
+    for scene_id, meta in manifest.items():
+        t = _parse_captured_at(meta)
+        if t is None:
+            continue
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        diff = abs((t - ts).total_seconds())
+        if diff <= MAX_SCENE_TIME_DIFF_SECONDS and (best_diff is None or diff < best_diff):
+            best_diff = diff
+            best = (scene_id, meta)
+    return best
+
+
+def _drift_for_frame(tank_id: str, frame_index: int, scale: float = 0.00015) -> tuple[float, float]:
+    """Deterministic small offset so tanks appear to move across playback frames."""
+    h = int(hashlib.sha256(f"{tank_id}-{frame_index}".encode()).hexdigest()[:8], 16)
+    h2 = int(hashlib.sha256(f"{tank_id}-{frame_index}-lng".encode()).hexdigest()[:8], 16)
+    lat_d = (h % 1000) / 1000.0 - 0.5
+    lng_d = (h2 % 1000) / 1000.0 - 0.5
+    return lat_d * scale, lng_d * scale
+
+
+@app.post("/playback")
+def playback(req: AnalyzeRequest):
+    """
+    Returns 14 frames (7 days, 2 timestamps per day): from 7 days ago 00:00 UTC to now.
+    Each frame has capturedAt (ISO) and detections in the AOI, with slight per-frame drift
+    so tank positions appear to move over time.
+    """
+    manifest = load_manifest()
+    ring = req.aoi.coordinates[0]
+    timestamps = _playback_timestamps(days=7)
+    frames: List[Dict] = []
+
+    for frame_index, ts in enumerate(timestamps):
+        scene_pair = _pick_scene_for_timestamp(manifest, ts)
+        if not scene_pair:
+            frames.append({
+                "capturedAt": ts.isoformat(),
+                "label": ts.strftime("%Y-%m-%d %H:%M UTC"),
+                "detections": [],
+            })
+            continue
+
+        scene_id, meta = scene_pair
+        raw_dets = mock_ml_detections(scene_id, meta)
+        dets: List[Dict] = []
+
+        for det_index, d in enumerate(raw_dets, start=1):
+            lat, lng = pixel_to_latlng(meta, d["x"], d["y"], d.get("imgW", 1024), d.get("imgH", 1024))
+            if not point_in_polygon(lng, lat, ring):
+                continue
+            dlat, dlng = _drift_for_frame(d.get("tankId", f"T-{det_index:03d}"), frame_index)
+            lat += dlat
+            lng += dlng
+            dets.append({
+                "tankId": d.get("tankId", f"{scene_id}-T-{det_index:03d}"),
+                "sceneId": scene_id,
+                "lat": lat,
+                "lng": lng,
+                "confidence": d.get("confidence"),
+                "classId": d.get("classId"),
+                "className": d.get("className"),
+            })
+
+        frames.append({
+            "capturedAt": ts.isoformat(),
+            "label": ts.strftime("%Y-%m-%d %H:%M UTC"),
+            "detections": dets,
+        })
+
+    return {
+        "timeRange": {
+            "from": timestamps[0].isoformat(),
+            "to": timestamps[-1].isoformat(),
+        },
+        "frames": frames,
     }
 
 
