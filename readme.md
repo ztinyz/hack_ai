@@ -23,6 +23,11 @@ A full-stack geospatial intelligence application that detects military vehicles 
 └─────────────────────────────────┘
 ```
 
+## Images
+<img width="768" height="432" alt="image" src="https://github.com/user-attachments/assets/a316a7f0-ba84-4c89-a4da-06dea87f74a8" />
+
+<img width="768" height="432" alt="image" src="https://github.com/user-attachments/assets/0da8c179-e16e-431d-b6da-47600267516c" />
+
 ## Features
 
 - **Interactive AOI Drawing** — Click-to-place polygon vertices on a satellite map to define a search area
